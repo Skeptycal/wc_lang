@@ -2338,14 +2338,17 @@ class RateLaw(obj_model.Model):
         """ Check that rate law evaluates """
         if self.equation:
             try:
-                transcoded = RateLawUtils.transcode(self.equation, self.equation.modifiers, self.equation.parameters)
+                transcoded = RateLawUtils.transcode(self.equation, self.equation.modifiers, self.equation.parameters, self.equation.observables)
                 concentrations = {}
                 parameters = {}
+                observables = {}
                 for s in self.equation.modifiers:
                     concentrations[s.id()] = 1.0
                 for p in self.equation.parameters:
                     parameters[p.id] = 1.0
-                RateLawUtils.eval_rate_law(self, concentrations, parameters, transcoded_equation=transcoded)
+                for o in self.equation.observables:
+                    observables[o.id] = 1.0
+                RateLawUtils.eval_rate_law(self, concentrations, parameters, observables, transcoded_equation=transcoded)
             except Exception as error:
                 msg = str(error)
                 attr = self.__class__.Meta.attributes['equation']
@@ -2372,6 +2375,8 @@ class RateLawEquation(obj_model.Model):
     transcoded = LongStringAttribute()
     modifiers = ManyToManyAttribute(Species, related_name='rate_law_equations')
     parameters = ManyToManyAttribute('Parameter', related_name='rate_law_equations')
+    observables = ManyToManyAttribute(Observable, related_name='rate_law_equations')
+
 
     class Meta(obj_model.Model.Meta):
         """
@@ -2381,7 +2386,7 @@ class RateLawEquation(obj_model.Model):
             valid_used_models (:obj:`tuple` of `str`): names of `obj_model.Model`s in this module that a
                 `RateLawEquation` is allowed to reference in its `expression`
         """
-        attribute_order = ('expression', 'modifiers', 'parameters')
+        attribute_order = ('expression', 'modifiers', 'parameters', 'observables')
         tabular_orientation = TabularOrientation.inline
         ordering = ('rate_law',)
         valid_functions = (ceil, floor, exp, pow, log, log10, min, max)
@@ -2409,6 +2414,7 @@ class RateLawEquation(obj_model.Model):
         """
         modifiers = []
         parameters = []
+        observables = []
         errors = []
         modifier_pattern = '(^|[^a-z0-9_])({}\[{}\])([^a-z0-9_]|$)'.format(SpeciesType.id.pattern[1:-1],
                                                                            Compartment.id.pattern[1:-1])
@@ -2427,7 +2433,11 @@ class RateLawEquation(obj_model.Model):
                 if match[1] not in reserved_names:
                     parameter, error = Parameter.deserialize(match[1], objects)
                     if error:
-                        errors += error.messages
+                        observable, error = Observable.deserialize(match[1], objects)
+                        if error:
+                            errors += error.messages
+                        else:
+                            observables.append(observable)
                     else:
                         parameters.append(parameter)
         except Exception as e:
@@ -2444,7 +2454,7 @@ class RateLawEquation(obj_model.Model):
         if serialized_val in objects[cls]:
             obj = objects[cls][serialized_val]
         else:
-            obj = cls(expression=value, modifiers=det_dedupe(modifiers), parameters=det_dedupe(parameters))
+            obj = cls(expression=value, modifiers=det_dedupe(modifiers), parameters=det_dedupe(parameters), observables = det_dedupe(observables))
             objects[cls][serialized_val] = obj
         return (obj, None)
 
@@ -2474,19 +2484,21 @@ class RateLawEquation(obj_model.Model):
 
         # check parameters
         parameter_ids = set((x.serialize() for x in self.parameters))
+        observable_ids = set((x.serialize() for x in self.observables))
+        parameter_ids = parameter_ids.union(observable_ids)
         parameter_pattern = '(^|[^a-z0-9_\[\]])({})([^a-z0-9_\[\]]|$)'.format(Parameter.id.pattern[1:-1])
         entity_ids = set([x[1] for x in re.findall(parameter_pattern, self.expression, flags=re.I)])
         reserved_names = set([func.__name__ for func in RateLawEquation.Meta.valid_functions] + ['k_cat', 'k_m'])
         entity_ids -= reserved_names
         if parameter_ids != entity_ids:
             for id in parameter_ids.difference(entity_ids):
-                errors.append('Extraneous parameter "{}"'.format(id))
+                errors.append('Extraneous parameter/observable "{}"'.format(id))
 
             for id in entity_ids.difference(parameter_ids):
-                errors.append('Undefined parameter "{}"'.format(id))
+                errors.append('Undefined parameter/observable "{}"'.format(id))
 
             for id in reserved_names:
-                errors.append('Invalid parameter with a reserved_name "{}"'.format(id))
+                errors.append('Invalid parameter/observable with a reserved_name "{}"'.format(id))
 
         # return error
         if errors:

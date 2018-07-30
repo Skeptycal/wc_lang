@@ -19,6 +19,7 @@ import wc_lang
 
 CONCENTRATIONS_DICT = 'concentrations'
 PARAMETERS_DICT = 'parameters'
+OBSERVABLES_DICT = 'observables'
 
 # TODOS
 '''
@@ -42,7 +43,7 @@ class RateLawUtils(object):
     '''A set of static rate_law methods '''
 
     @staticmethod
-    def transcode(rate_law_equation, species, parameters):
+    def transcode(rate_law_equation, species, parameters, observables):
         '''Translate a `wc_lang.core.RateLawEquation` into a python expression that can be evaluated
         during a simulation.
 
@@ -117,7 +118,7 @@ class RateLawUtils(object):
                 raise ValueError("'{}' not a known specie in rate law '{}'".format(
                     parsed_id, rate_law_expression))
 
-        def convert_parameter_name(tokens, parameter_ids, rate_law_expression):
+        def convert_parameter_name(tokens, parameter_ids, observable_ids, rate_law_expression):
             '''Translate a parameter ID in `tokens` into a Python expression to be eval'ed during simulation
 
             Args:
@@ -136,9 +137,11 @@ class RateLawUtils(object):
             parsed_id = tokens[0][1]
             if parsed_id in parameter_ids:
                 return " {}['{}']".format(PARAMETERS_DICT, parsed_id)
+            elif parsed_id in observable_ids:
+                return " {}['{}']".format(OBSERVABLES_DICT, parsed_id)
             else:
                 raise ValueError("'{}' not a known parameter in rate law '{}'".format(
-                    parsed_id, rate_law_expression))
+                    parsed_id, rate_law_expression))            
 
         if '__' in rate_law_equation.expression:
             raise ValueError("Security risk: rate law expression '{}' contains '__'.".format(
@@ -147,6 +150,7 @@ class RateLawUtils(object):
         rate_law_expression = rate_law_equation.expression
         species_ids = set([specie.id() for specie in species])
         parameter_ids = set([parameter.id for parameter in parameters])
+        observable_ids = set([observable.id for observable in observables])
         reserved_parameter_ids = set(map(lambda f: f.__name__, wc_lang.RateLawEquation.Meta.valid_functions)) | \
             set(['k_cat', 'k_m'])
 
@@ -170,7 +174,7 @@ class RateLawUtils(object):
                 idx += 4
             elif possible_parameter_id(tokens[idx:idx+1], reserved_parameter_ids):
                 result.append(
-                    (token.NAME, convert_parameter_name(tokens[idx:idx+1], parameter_ids, rate_law_expression)))
+                    (token.NAME, convert_parameter_name(tokens[idx:idx+1], parameter_ids, observable_ids, rate_law_expression)))
                 idx += 1
             else:
                 result.append((tokens[idx]))
@@ -194,10 +198,11 @@ class RateLawUtils(object):
                     if hasattr(rate_law, 'equation'):
                         rate_law.equation.transcoded = RateLawUtils.transcode(rate_law.equation,
                                                                               submodel.get_species(),
-                                                                              rate_law.equation.parameters)
+                                                                              rate_law.equation.parameters,
+                                                                              rate_law.equation.observables)
 
     @staticmethod
-    def eval_reaction_rate_laws(reaction, concentrations, parameters):
+    def eval_reaction_rate_laws(reaction, concentrations, parameters, observables):
         '''Evaluate a reaction's rate laws at the given species concentrations and parameter values
 
         Args:
@@ -212,11 +217,11 @@ class RateLawUtils(object):
         '''
         rates = []
         for rate_law in reaction.rate_laws:
-            rates.append(RateLawUtils.eval_rate_law(rate_law, concentrations, parameters))
+            rates.append(RateLawUtils.eval_rate_law(rate_law, concentrations, parameters, observables))
         return rates
 
     @staticmethod
-    def eval_rate_law(rate_law, concentrations, parameters, transcoded_equation=None):
+    def eval_rate_law(rate_law, concentrations, parameters, observables, transcoded_equation=None):
         '''Evaluate a rate law at the given species concentrations and parameter values
 
         Args:
@@ -247,6 +252,7 @@ class RateLawUtils(object):
             local_ns['k_m'] = rate_law.k_m
         local_ns[CONCENTRATIONS_DICT] = concentrations
         local_ns[PARAMETERS_DICT] = parameters
+        local_ns[OBSERVABLES_DICT] = observables
 
         try:
             return eval(transcoded_equation, {}, local_ns)
